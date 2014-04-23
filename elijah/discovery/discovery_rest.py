@@ -106,7 +106,6 @@ class ResourceInfo(Resource):
                 continue
             filesize = os.path.getsize(abspath)
             total_filesize += filesize
-            import pdb;pdb.set_trace()
             if self.file_cache_monitor.check_file(abspath, is_abspath=True) is True:
                 relpath = os.path.relpath(abspath, self.dfs_root)
                 ret_filelist.append(relpath)
