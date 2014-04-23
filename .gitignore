@@ -1,0 +1,15 @@
+MANIFEST
+TODO.md
+dist/
+build/
+test/
+src/tmp/
+*.a
+*.jar
+*.o
+*.cproject
+*.lzma
+*.qcow2
+*.mem
+*.pyc
+*.class

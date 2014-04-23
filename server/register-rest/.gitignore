@@ -1,0 +1,7 @@
+static/
+env/
+cloudlet/network/db/
+project/local.py
+gunicorn.pid
+*.pyc
+mysql.conf

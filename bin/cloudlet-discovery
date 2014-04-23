@@ -1,0 +1,162 @@
+#!/usr/bin/env python 
+#
+# Cloudlet Infrastructure for Mobile Computing
+#
+#   Author: Kiryong Ha <krha@cmu.edu>
+#
+#   Copyright (C) 2011-2013 Carnegie Mellon University
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+#
+
+import os
+import sys
+if os.path.exists("../elijah/discovery") is True:
+    sys.path.insert(0, "..")
+
+from optparse import OptionParser
+from flask import Flask
+from flask.ext import restful
+
+
+from elijah.discovery.ds_register import RegisterThread
+from elijah.discovery.ds_register import RegisterError
+from elijah.discovery.monitor.resource import ResourceMonitorError
+from elijah.discovery.monitor.resource import ResourceMonitor
+from elijah.discovery.config import DiscoveryConst as DiscoveryConst
+from elijah.discovery.config import CLOUDLET_FEATURE
+from elijah.discovery import log as logging
+from elijah.discovery.monitor import file_cache
+from elijah.discovery.monitor.file_cache import CacheMonitorError
+from elijah.discovery.discovery_rest import ResourceInfo
+from elijah.discovery.discovery_rest import CacheInfo
+from elijah.discovery.avahi_server import AvahiServerThread
+from elijah.discovery.avahi_server import AvahiDiscoverError
+
+
+LOG = logging.getLogger(__name__)
+UPDATE_PERIOD = 30 # update information for every minute
+
+
+def process_command_line(argv):
+    USAGE = "$ %prog [registration_server_name] [option]\n"
+    USAGE += "  Example) $ %prog http://register.findcloudlet.org\n"
+    VERSION = 'cloudlet registration tool: %s' % DiscoveryConst.VERSION
+    DESCRIPTION = "Register Cloudlet to a central server for discovery purpose"
+    parser = OptionParser(usage=USAGE,
+            version=VERSION,
+            description=DESCRIPTION)
+
+    parser.add_option(
+            '-i', '--rest_ip', action='store', type='string', dest='rest_ip', \
+            default=None, help="Manually set cloudlet rest server's IP address")
+    parser.add_option(
+            '-p', '--rest_port', action='store', type='int', \
+            dest='rest_port', default=DiscoveryConst.REST_API_PORT, \
+            help="Manually set rest port number")
+    parser.add_option(
+            '-a', '--latitude', action='store', type='string', dest='latitude', \
+            default=None, help="Manually set cloudlet's latitude")
+    parser.add_option(
+            '-o', '--longitude', action='store', type='string', dest='longitude',
+            default=None, help="Manually set cloudlet's longitude")
+    parser.add_option('-d',
+            dest='daemonize', action='store_false', default=True,
+            help='do not run as a daemon')
+
+    settings, args = parser.parse_args(argv)
+    if len(args) != 1:
+        parser.error("Need URL for registration server")
+
+    register_server = str(args[0]).lower()
+    return register_server, settings
+
+
+def main(argv):
+    register_server, settings = process_command_line(sys.argv[1:])
+    web_cache_monitor = None
+    file_cache_monitor = None
+    register_client = None
+    avahi_server = None
+    ret_code = 0
+
+    try:
+        # DFS Cache monitor
+        try:
+            LOG.info("[CACHE] FUSE mount at %s, which is loop back of %s" % \
+                    (DiscoveryConst.CLOUDLET_FS_ROOT, DiscoveryConst.DFS_ROOT))
+            file_cache_monitor = file_cache.get_instance()
+        except CacheMonitorError as e:
+            LOG.warning(str(e))
+
+        # Start registration client
+        LOG.info("[Register] Start Register Client")
+        resource_stats = ResourceMonitor().get_static_resource()
+        register_client = RegisterThread(register_server, resource_stats,
+                feature_flag_list = {CLOUDLET_FEATURE.VM_SYNTHESIS_APP},
+                update_period=UPDATE_PERIOD, cloudlet_ip=settings.rest_ip,
+                cloudlet_rest_port=settings.rest_port,
+                latitude=settings.latitude, longitude=settings.longitude)
+        register_client.start()
+
+        # Start Avahi Server
+        try:
+            avahi_server = AvahiServerThread(service_name=DiscoveryConst.SERVICE_NAME,
+                    service_port=DiscoveryConst.SERVICE_PORT)
+            avahi_server.start()
+        except AvahiDiscoverError as e:
+            LOG.info(str(e))
+            LOG.info("Cannot start Avahi Server. Start avahi-daemon")
+            avahi_server.terminate()
+            avahi_server = None
+
+        # Local rest API
+        app = Flask(__name__)
+        api = restful.Api(app)
+        api.add_resource(ResourceInfo, '/api/v1/resource/')
+        api.add_resource(CacheInfo, '/api/v1/cache/')
+        # do no turn on debug mode. it make a mess for graceful terminate
+        LOG.info("[REST] Start RESTful API Server at %d" % \
+                (settings.rest_port))
+        app.run(host="0.0.0.0", port=DiscoveryConst.REST_API_PORT, threaded=True)
+    except ResourceMonitorError as e:
+        LOG.info(str(e))
+        LOG.error("Cannot register Cloudlet to central server\n")
+        ret_code = 1
+    except RegisterError as e:
+        LOG.warning(str(e))
+        LOG.warning("Cannot register Cloudlet to %s" % (register_server))
+        ret_code = 1
+    except KeyboardInterrupt as e:
+        LOG.warning("User exists")
+        ret_code = 1
+    except Exception as e:
+        import traceback
+        LOG.warning(traceback.format_exc())
+        LOG.error(str(e))
+        ret_code = 1
+    finally:
+        if register_client is not None:
+            register_client.terminate()
+        if file_cache_monitor is not None:
+            file_cache_monitor.terminate()
+        if web_cache_monitor is not None:
+            web_cache_monitor.terminate()
+        if avahi_server is not None:
+            avahi_server.terminate()
+    return ret_code
+    return 1
+
+
+if __name__ == "__main__":
+    status = main(sys.argv)
+    sys.exit(status)
