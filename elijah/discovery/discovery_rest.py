@@ -50,8 +50,11 @@ class ResourceInfo(Resource):
         super(ResourceInfo, self).__init__(*args, **kwargs)
         if self.resource_monitor is None:
             self.resource_monitor = ResourceMonitor()
-        if self.file_cache_monitor is None:
-            self.file_cache_monitor = file_cache.get_instance()
+        try:
+            if self.file_cache_monitor is None:
+                self.file_cache_monitor = file_cache.get_instance()
+        except file_cache.CacheMonitorError as e:
+            self.file_cache_monitor = None
         self.dfs_root = DiscoveryConst.DFS_ROOT
 
     def get(self):
@@ -65,13 +68,16 @@ class ResourceInfo(Resource):
             app_id = app_info.get(AppInfo.APP_ID, None)
 
             # file cache
-            file_cachelist = app_info.get(AppInfo.REQUIRED_CACHE_FILES, None)
-            cache_files, total_filesize, total_cachesize = \
-                    self.check_file_cache(file_cachelist)
-            if total_filesize is not 0:
-                cache_score = float(100.0*total_cachesize/total_filesize)
-            else:
-                cache_score = float(0)
+            cache_files = list()
+            cache_score = float(0)
+            if self.file_cache_monitor is not None:
+                file_cachelist = app_info.get(AppInfo.REQUIRED_CACHE_FILES, None)
+                cache_files, total_filesize, total_cachesize = \
+                        self.check_file_cache(file_cachelist)
+                if total_filesize is not 0:
+                    cache_score = float(100.0*total_cachesize/total_filesize)
+                else:
+                    cache_score = float(0)
             ret_data.update({\
                     ResourceConst.APP_CACHE_FILES: cache_files,
                     ResourceConst.APP_CACHE_TOTAL_SCORE: cache_score,
@@ -100,6 +106,7 @@ class ResourceInfo(Resource):
                 continue
             filesize = os.path.getsize(abspath)
             total_filesize += filesize
+            import pdb;pdb.set_trace()
             if self.file_cache_monitor.check_file(abspath, is_abspath=True) is True:
                 relpath = os.path.relpath(abspath, self.dfs_root)
                 ret_filelist.append(relpath)
@@ -113,12 +120,17 @@ class CacheInfo(Resource):
 
     def __init__(self, *args, **kwargs):
         super(CacheInfo, self).__init__(*args, **kwargs)
-        if self.file_cache_monitor is None:
-            self.file_cache_monitor = file_cache.get_instance()
+        try:
+            if self.file_cache_monitor is None:
+                self.file_cache_monitor = file_cache.get_instance()
+        except file_cache.CacheMonitorError as e:
+            self.file_cache_monitor = None
 
     def get(self):
-        filecache_ret = self.file_cache_monitor.cached_files()
-        ret_data = {ResourceConst.APP_CACHE_FILES: filecache_ret}
+        ret_data = {}
+        if self.file_cache_monitor is not None:
+            filecache_ret = self.file_cache_monitor.cached_files()
+            ret_data = {ResourceConst.APP_CACHE_FILES: filecache_ret}
         return jsonify(ret_data)
 
 
