@@ -1,4 +1,4 @@
-Django==1.5.1
+Django>=1.11.18
 gunicorn>=19.5.0
 django-tastypie==0.10.0
 python-mimeparse==0.1.4
